@@ -1,7 +1,9 @@
 """Behaviour tests against fake Telegram objects. Run: python test_bot.py"""
 
 import asyncio
+from datetime import datetime
 from types import SimpleNamespace as NS
+from zoneinfo import ZoneInfo
 
 from telegram.error import BadRequest
 from telegram.ext import ApplicationHandlerStop
@@ -173,14 +175,44 @@ async def test_pin_notice_dropped_only_for_our_pins():
     assert deleted == [True]
 
 
+def test_expires_at_next_nightly_cutoff():
+    la = ZoneInfo("America/Los_Angeles")
+    saved = bot.ZONE, bot.EXPIRE_AT
+    bot.ZONE, bot.EXPIRE_AT = la, (0, 30)
+    try:
+        def at(*a):
+            return datetime(*a, tzinfo=la).timestamp()
+
+        # Evening check: closes at 00:30 the next morning
+        assert bot.expires_at(at(2026, 10, 5, 20, 0)) == at(2026, 10, 6, 0, 30)
+        # Started after midnight but before 00:30: closes that same night
+        assert bot.expires_at(at(2026, 10, 6, 0, 10)) == at(2026, 10, 6, 0, 30)
+        # Started exactly at, or just after, the cutoff: the next night's
+        assert bot.expires_at(at(2026, 10, 6, 0, 30)) == at(2026, 10, 7, 0, 30)
+        assert bot.expires_at(at(2026, 10, 6, 0, 31)) == at(2026, 10, 7, 0, 30)
+        # Across the DST change (1 Nov 2026) it stays at 00:30 wall-clock
+        assert bot.expires_at(at(2026, 10, 31, 22, 0)) == at(2026, 11, 1, 0, 30)
+        assert bot.expires_at(at(2026, 11, 1, 3, 0)) == at(2026, 11, 2, 0, 30)
+    finally:
+        bot.ZONE, bot.EXPIRE_AT = saved
+
+    assert bot.parse_clock("00:30") == (0, 30) and bot.parse_clock(" 23:05 ") == (23, 5)
+    for bad in ("24:00", "12:60", "noon"):
+        try:
+            bot.parse_clock(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted {bad!r}")
+
+
 async def test_expiry():
     calls.clear()
     ctx, upd = make()
     await bot.readycheck(upd, ctx)
     poll = ctx.chat_data["poll"]
-    now = poll["created"]
-    assert not await bot.check_poll(ctx.bot, 1, ctx.chat_data, now + bot.EXPIRE_SECONDS - 1)
-    assert await bot.check_poll(ctx.bot, 1, ctx.chat_data, now + bot.EXPIRE_SECONDS)
+    cutoff = bot.expires_at(poll["created"])
+    assert not await bot.check_poll(ctx.bot, 1, ctx.chat_data, cutoff - 1)
+    assert await bot.check_poll(ctx.bot, 1, ctx.chat_data, cutoff)
     assert "poll" not in ctx.chat_data and ("delete", poll["message_id"]) in calls
 
 

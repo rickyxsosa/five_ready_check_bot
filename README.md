@@ -19,7 +19,7 @@ Buttons: **✅ At my desk**, **⏳ Soon**, **🕙 Later**, **❌ Not tonight**. 
 - **One live check per group.** A new `/readycheck` replaces the old one, whatever the game. The bot deletes the old message, or, past Telegram's 48h limit on deleting, marks it "Replaced" and removes its buttons. `/cancel` works the same way.
 - **The "get in!" ping** goes out once the target is reached. If someone drops after that, the rest are told.
 - **Survives restarts.** Ready checks are saved to `PERSISTENCE_FILE` (`/data/dotabot.pickle` in the image), so buttons keep working after a redeploy or reboot. Mount `/data` as a volume.
-- **Expires** after `EXPIRE_HOURS` (6), so last night's check can't fire a ping the next day.
+- **Expires nightly** at `EXPIRE_AT` (00:30) in the `TZ` timezone, so last night's check can't fire a ping the next day. A check started at 00:10 closes 20 minutes later.
 - **Nudges "Soon".** Anyone who has been on ⏳ Soon for `SOON_NUDGE_MINUTES` (15) while the group is still short gets one ping. That's one per person per check.
 - **Pins the check** if the bot is a group admin with "Pin messages". Without that it still works, just unpinned.
 - **Keeps the chat tidy.** It deletes the `/readycheck` and `/cancel` people type, and Telegram's "pinned a message" notice. Short replies like "cancelled by …" delete themselves after 30 seconds. Deleting other people's messages needs admin with "Delete messages"; without it the commands just stay.
@@ -42,7 +42,8 @@ With the list set, the bot leaves any other group it is added to, and answers a 
 | `TELEGRAM_BOT_TOKEN` | (required) | From @BotFather |
 | `ALLOWED_CHAT_IDS` | (empty: any chat) | Chat ids the bot works in |
 | `PLAYERS_NEEDED` | `5` | Default player count |
-| `EXPIRE_HOURS` | `6` | Ready-check lifetime |
+| `EXPIRE_AT` | `00:30` | Local time (HH:MM) each night when open checks close |
+| `TZ` | UTC | Timezone for `EXPIRE_AT`, e.g. `America/Los_Angeles` |
 | `SOON_NUDGE_MINUTES` | `15` | When to nudge "Soon" |
 | `PERSISTENCE_FILE` | `/data/dotabot.pickle` | Where checks are saved |
 

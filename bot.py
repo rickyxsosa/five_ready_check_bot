@@ -9,7 +9,8 @@
 /cancel                 - remove the chat's current ready check.
 
 Ready checks are saved to PERSISTENCE_FILE, so a restart keeps them working.
-A background tick expires checks after EXPIRE_HOURS and nudges anyone who has
+A background tick expires checks at the next EXPIRE_AT (local time, from TZ)
+after they were posted, and nudges anyone who has
 sat on "Soon" for SOON_NUDGE_MINUTES while the group is still short.
 
 Set ALLOWED_CHAT_IDS to keep a deployed bot to your own group(s).
@@ -19,6 +20,8 @@ import html
 import logging
 import os
 import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, Update
 from telegram.constants import ParseMode
@@ -44,7 +47,19 @@ log = logging.getLogger("readycheck")
 
 DEFAULT_NEEDED = int(os.environ.get("PLAYERS_NEEDED", "5"))
 PERSISTENCE_FILE = os.environ.get("PERSISTENCE_FILE", "/data/dotabot.pickle")
-EXPIRE_SECONDS = float(os.environ.get("EXPIRE_HOURS", "6")) * 3600
+
+
+def parse_clock(raw: str) -> tuple[int, int]:
+    hour, minute = (int(part) for part in raw.strip().split(":"))
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        raise ValueError(f"EXPIRE_AT must be HH:MM, got {raw!r}")
+    return hour, minute
+
+
+# Checks close at this local time each night, e.g. "00:30". TZ decides whose
+# night; without it that is UTC.
+EXPIRE_AT = parse_clock(os.environ.get("EXPIRE_AT", "00:30"))
+ZONE = ZoneInfo(os.environ.get("TZ") or "UTC")
 NUDGE_SECONDS = float(os.environ.get("SOON_NUDGE_MINUTES", "15")) * 60
 TICK_SECONDS = 60
 TRANSIENT_SECONDS = 30
@@ -329,13 +344,24 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+def expires_at(created: float) -> float:
+    """The first EXPIRE_AT after a check was posted. Built from the calendar date
+    rather than by adding 24h, so it stays on the wall-clock time across DST."""
+    start = datetime.fromtimestamp(created, ZONE)
+    for day in (start.date(), start.date() + timedelta(days=1)):
+        cutoff = datetime(day.year, day.month, day.day, *EXPIRE_AT, tzinfo=ZONE)
+        if cutoff > start:
+            return cutoff.timestamp()
+    raise AssertionError("unreachable: tomorrow's cutoff is always later")
+
+
 async def check_poll(bot, chat_id: int, data: dict, now: float) -> bool:
     """Expire or nudge one chat's ready check. Returns True if chat_data changed."""
     poll = data.get("poll")
     if not poll:
         return False
 
-    if now - poll["created"] >= EXPIRE_SECONDS:
+    if now >= expires_at(poll["created"]):
         data.pop("poll")
         await retire(bot, chat_id, poll, "⌛ <i>Expired.</i>")
         return True
