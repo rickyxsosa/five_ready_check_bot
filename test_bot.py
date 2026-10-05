@@ -99,10 +99,10 @@ async def test_cancel_and_replace():
     await bot.cancel(upd, ctx)
     assert calls[-1][0] == "send" and "no ready check" in calls[-1][2]
 
-    await bot.dota(upd, ctx)
+    await bot.readycheck(upd, ctx)
     first = ctx.chat_data["poll"]["message_id"]
     assert ("pin", first) in calls and ctx.chat_data["poll"]["pinned"]
-    await bot.dota(upd, ctx)
+    await bot.readycheck(upd, ctx)
     second = ctx.chat_data["poll"]["message_id"]
     assert ("delete", first) in calls and second != first
 
@@ -116,7 +116,7 @@ async def test_cancel_and_replace():
 async def test_old_message_falls_back_to_edit_and_unpin():
     calls.clear()
     ctx, upd = make(fail_delete=True)
-    await bot.dota(upd, ctx)
+    await bot.readycheck(upd, ctx)
     mid = ctx.chat_data["poll"]["message_id"]
     calls.clear()
     await bot.cancel(upd, ctx)
@@ -129,14 +129,14 @@ async def test_old_message_falls_back_to_edit_and_unpin():
 async def test_pin_without_admin_still_works():
     calls.clear()
     ctx, upd = make(can_pin=False)
-    await bot.dota(upd, ctx)
+    await bot.readycheck(upd, ctx)
     assert "poll" in ctx.chat_data and not ctx.chat_data["poll"].get("pinned")
 
 
 async def test_commands_are_tidied():
     calls.clear()
     ctx, upd = make()
-    await bot.dota(upd, ctx)
+    await bot.readycheck(upd, ctx)
     assert calls[0] == ("delcmd",), calls
     await bot.cancel(upd, ctx)
     assert calls.count(("delcmd",)) == 2
@@ -154,7 +154,7 @@ async def test_commands_are_tidied():
 async def test_no_delete_rights_still_works():
     calls.clear()
     ctx, upd = make(can_delete_commands=False)
-    await bot.dota(upd, ctx)
+    await bot.readycheck(upd, ctx)
     assert "poll" in ctx.chat_data and ("delcmd",) not in calls
 
 
@@ -176,7 +176,7 @@ async def test_pin_notice_dropped_only_for_our_pins():
 async def test_expiry():
     calls.clear()
     ctx, upd = make()
-    await bot.dota(upd, ctx)
+    await bot.readycheck(upd, ctx)
     poll = ctx.chat_data["poll"]
     now = poll["created"]
     assert not await bot.check_poll(ctx.bot, 1, ctx.chat_data, now + bot.EXPIRE_SECONDS - 1)
@@ -188,7 +188,7 @@ async def test_soon_nudge_once_and_only_when_short():
     calls.clear()
     ctx, upd = make()
     ctx.args = ["2"]
-    await bot.dota(upd, ctx)
+    await bot.readycheck(upd, ctx)
     poll = ctx.chat_data["poll"]
     await press(ctx, poll["message_id"], 7, "Sam", "soon")
     since = poll["votes"][7][2]
@@ -206,6 +206,53 @@ async def test_soon_nudge_once_and_only_when_short():
     await press(ctx, poll["message_id"], 10, "Cy", "soon")
     poll["votes"][10] = ("Cy", "soon", since)
     assert not await bot.check_poll(ctx.bot, 1, ctx.chat_data, since + bot.NUDGE_SECONDS)
+
+
+def test_parse_args():
+    p = bot.parse_args
+    assert p([]) == (None, None)
+    assert p(["Dota", "5"]) == ("Dota", 5)
+    assert p(["STS", "4"]) == ("STS", 4)
+    assert p(["4", "STS"]) == ("STS", 4)
+    assert p(["Slay", "the", "Spire", "4"]) == ("Slay the Spire", 4)
+    assert p(["Slay", "the", "Spire"]) == ("Slay the Spire", None)
+    assert p(["3"]) == (None, 3)
+    assert p(["0"]) == (None, 1)
+    assert p(["x" * 100])[0] == "x" * bot.MAX_GAME_NAME
+
+
+async def test_game_names_and_remembered_counts():
+    calls.clear()
+    ctx, upd = make()
+    ctx.args = ["STS", "4"]
+    await bot.readycheck(upd, ctx)
+    poll = ctx.chat_data["poll"]
+    assert poll["game"] == "STS" and poll["needed"] == 4
+    assert "<b>STS?</b> (0/4 ready)" in bot.render(poll)
+
+    # Same game, no number: remembers 4, whatever the case
+    ctx.args = ["sts"]
+    await bot.readycheck(upd, ctx)
+    assert ctx.chat_data["poll"]["needed"] == 4
+
+    # A game it hasn't seen falls back to the default
+    ctx.args = ["Dota"]
+    await bot.readycheck(upd, ctx)
+    assert ctx.chat_data["poll"]["needed"] == bot.DEFAULT_NEEDED
+
+    # No game at all: a plain ready check
+    ctx.args = []
+    await bot.readycheck(upd, ctx)
+    poll = ctx.chat_data["poll"]
+    assert poll["game"] is None and "Ready check?" in bot.render(poll)
+
+    # Names are escaped, and the full-house header names the game
+    poll = {"game": "<b>R&D</b>", "needed": 1, "votes": {7: ("A", "ready", 0)}}
+    assert "GAME ON — &lt;b&gt;R&amp;D&lt;/b&gt;!" in bot.render(poll)
+
+    # Checks saved before games existed still render
+    old = {"needed": 5, "votes": {}}
+    assert "Ready check?" in bot.render(old)
 
 
 def gate_update(chat_id, chat_type, text=None, callback=False):
@@ -239,21 +286,21 @@ async def test_allow_list():
     try:
         # Open mode: everything passes
         bot.ALLOWED_CHAT_IDS = frozenset()
-        upd, _ = gate_update(-999, "supergroup", "/dota")
+        upd, _ = gate_update(-999, "supergroup", "/readycheck")
         assert not await gated(upd, ctx)
 
         bot.ALLOWED_CHAT_IDS = frozenset({-1001})
-        upd, _ = gate_update(-1001, "supergroup", "/dota")
+        upd, _ = gate_update(-1001, "supergroup", "/readycheck")
         assert not await gated(upd, ctx)
 
         # A stranger's group: stopped, and the bot leaves
         calls.clear()
-        upd, _ = gate_update(-999, "supergroup", "/dota")
+        upd, _ = gate_update(-999, "supergroup", "/readycheck")
         assert await gated(upd, ctx) and ("leave", -999) in calls
 
         # A stranger's DM: stopped, one pointer to the source, no leave
         calls.clear()
-        upd, _ = gate_update(555, "private", "/dota")
+        upd, _ = gate_update(555, "private", "/readycheck")
         assert await gated(upd, ctx)
         assert [c[0] for c in calls] == ["reply"] and bot.SOURCE_URL in calls[0][1]
 
@@ -273,7 +320,9 @@ async def test_allow_list():
 async def main():
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     for t in tests:
-        await t()
+        result = t()
+        if asyncio.iscoroutine(result):
+            await result
         print("ok  ", t.__name__)
     print(f"ALL OK ({len(tests)} tests)")
 

@@ -1,9 +1,12 @@
-"""Dota ready-check bot.
+"""Telegram ready-check bot for any game.
 
-/dota [n]  - start a ready check (default 5 players). Everyone taps a button;
-             when n people are "At my desk" the bot pings them all.
-             Replaces the chat's previous ready check.
-/cancel    - remove the chat's current ready check.
+/readycheck [game] [n]  - start a ready check, e.g. "/readycheck Dota 5".
+                          Everyone taps a button; when n people are "At my
+                          desk" the bot pings them all. The game is optional,
+                          and n defaults to the last count used for that game
+                          in this chat, else PLAYERS_NEEDED. Replaces the
+                          chat's previous ready check. /rc is an alias.
+/cancel                 - remove the chat's current ready check.
 
 Ready checks are saved to PERSISTENCE_FILE, so a restart keeps them working.
 A background tick expires checks after EXPIRE_HOURS and nudges anyone who has
@@ -37,7 +40,7 @@ logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", le
 logging.getLogger("httpx").setLevel(logging.WARNING)
 # The 60s tick would otherwise log two lines a minute, every minute
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
-log = logging.getLogger("dotabot")
+log = logging.getLogger("readycheck")
 
 DEFAULT_NEEDED = int(os.environ.get("PLAYERS_NEEDED", "5"))
 PERSISTENCE_FILE = os.environ.get("PERSISTENCE_FILE", "/data/dotabot.pickle")
@@ -46,6 +49,7 @@ NUDGE_SECONDS = float(os.environ.get("SOON_NUDGE_MINUTES", "15")) * 60
 TICK_SECONDS = 60
 TRANSIENT_SECONDS = 30
 SOURCE_URL = "https://github.com/rickyxsosa/five_ready_check_bot"
+MAX_GAME_NAME = 40
 
 
 def parse_chat_ids(raw: str) -> frozenset[int]:
@@ -64,6 +68,7 @@ STATUSES = {
 }
 
 # A poll, as stored in chat_data["poll"]:
+#   game        game name as typed, or None for a plain ready check
 #   needed      players required
 #   votes       {user_id: (first_name, status, since)}, since = when that status was set
 #   pinged      whether the "get in!" ping has gone out
@@ -88,10 +93,31 @@ def ready_users(poll: dict) -> list[tuple[int, str]]:
     return [(uid, name) for uid, (name, status, _) in poll["votes"].items() if status == "ready"]
 
 
+def parse_args(args: list[str]) -> tuple[str | None, int | None]:
+    """Split command args into (game, count). Dota 5 -> ("Dota", 5), 5 -> (None, 5),
+    Slay the Spire -> ("Slay the Spire", None). The count may come first or last."""
+    needed = None
+    if args and args[-1].isdigit():
+        needed, args = int(args[-1]), args[:-1]
+    elif args and args[0].isdigit():
+        needed, args = int(args[0]), args[1:]
+    game = " ".join(args).strip()[:MAX_GAME_NAME].strip() or None
+    return game, (max(1, needed) if needed is not None else None)
+
+
+def game_label(poll: dict) -> str:
+    game = poll.get("game")  # absent on checks saved before games existed
+    return html.escape(game) if game else ""
+
+
 def render(poll: dict, note: str | None = None) -> str:
     ready = len(ready_users(poll))
     needed = poll["needed"]
-    header = "🎮 <b>GAME ON!</b>" if ready >= needed else "🎮 <b>Dota tonight?</b>"
+    game = game_label(poll)
+    if ready >= needed:
+        header = f"🎮 <b>GAME ON — {game}!</b>" if game else "🎮 <b>GAME ON!</b>"
+    else:
+        header = f"🎮 <b>{game}?</b>" if game else "🎮 <b>Ready check?</b>"
     lines = [note, ""] if note else []
     lines += [f"{header} ({ready}/{needed} ready)", ""]
     for key, label in STATUSES.items():
@@ -130,7 +156,7 @@ async def gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if chat is None:
         return
     if not ALLOWED_CHAT_IDS:
-        if update.message and update.message.text and update.message.text.startswith("/dota"):
+        if update.message and update.message.text and update.message.text.startswith("/"):
             # Open mode: log ids so the owner can find theirs for ALLOWED_CHAT_IDS
             log.info("ready check in chat %s (%s)", chat.id, chat.title or chat.type)
         return
@@ -154,14 +180,16 @@ async def gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
-        f"Use /dota to start a ready check. I'll ping everyone once {DEFAULT_NEEDED} people are at their desk.\n"
-        "Use /dota 10 (or any number) to change how many players you need.\n"
-        "Use /cancel to remove the current ready check. A new /dota replaces the old one."
+        "/readycheck Dota 5 starts a ready check for Dota that needs 5 players. "
+        "When enough people are at their desk, I'll ping them all.\n"
+        "The game and number are optional. I remember each game's number, so next time /readycheck Dota is enough. "
+        f"A new game defaults to {DEFAULT_NEEDED}.\n"
+        "/rc works the same. /cancel removes the current ready check, and a new one replaces it."
     )
 
 
 async def tidy_command(update: Update) -> None:
-    """Delete the /dota or /cancel someone typed, so the chat shows the ready
+    """Delete the /readycheck or /cancel someone typed, so the chat shows the ready
     check and not a trail of commands. Deleting other people's messages needs
     admin with "Delete messages"; without it the command just stays."""
     try:
@@ -196,14 +224,18 @@ async def drop_pin_notice(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             log.info("could not delete pin notice in chat %s: %s", msg.chat_id, e)
 
 
-async def dota(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def readycheck(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await tidy_command(update)
-    needed = DEFAULT_NEEDED
-    if context.args:
-        try:
-            needed = max(1, int(context.args[0]))
-        except ValueError:
-            pass
+    game, needed = parse_args(context.args or [])
+
+    # Each game keeps its last player count per chat, so "/readycheck STS 4"
+    # once makes a bare "/readycheck STS" mean 4 afterwards
+    counts = context.chat_data.setdefault("counts", {})
+    key = game.casefold() if game else ""
+    if needed is None:
+        needed = counts.get(key, DEFAULT_NEEDED)
+    else:
+        counts[key] = needed
 
     chat = update.effective_chat
     # One live ready check per chat, so /cancel always knows which one it means
@@ -211,7 +243,7 @@ async def dota(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if old:
         await retire(context.bot, chat.id, old, "🔁 <i>Replaced by a newer ready check.</i>")
 
-    poll = {"needed": needed, "votes": {}, "pinged": False, "created": time.time(), "nudged": set()}
+    poll = {"game": game, "needed": needed, "votes": {}, "pinged": False, "created": time.time(), "nudged": set()}
     msg = await chat.send_message(render(poll), reply_markup=keyboard(), parse_mode=ParseMode.HTML)
     poll["message_id"] = msg.message_id
     context.chat_data["poll"] = poll
@@ -229,7 +261,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await tidy_command(update)
     poll = context.chat_data.pop("poll", None)
     if poll is None:
-        await say_briefly(update, context, "There's no ready check to cancel. Start one with /dota")
+        await say_briefly(update, context, "There's no ready check to cancel. Start one with /readycheck")
         return
     name = update.effective_user.first_name
     await retire(context.bot, update.effective_chat.id, poll, f"❌ <i>Cancelled by {html.escape(name)}.</i>")
@@ -240,7 +272,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     poll = context.chat_data.get("poll")
     if poll is None or poll["message_id"] != query.message.message_id:
-        await query.answer("This ready check has expired. Start a new one with /dota", show_alert=True)
+        await query.answer("This ready check has expired. Start a new one with /readycheck", show_alert=True)
         return
 
     user = query.from_user
@@ -266,8 +298,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(ready) >= needed and not poll["pinged"]:
         poll["pinged"] = True
         mentions = " ".join(mention(uid, name) for uid, name in ready)
+        game = game_label(poll)
         await query.message.reply_text(
-            f"🎮 <b>{len(ready)} ready — get in!</b>\n{mentions}", parse_mode=ParseMode.HTML
+            f"🎮 <b>{len(ready)} ready{' for ' + game if game else ''} — get in!</b>\n{mentions}",
+            parse_mode=ParseMode.HTML,
         )
     elif len(ready) < needed and poll["pinged"]:
         # Someone dropped after we called it, so let the others know
@@ -344,7 +378,7 @@ def main() -> None:
     app = Application.builder().token(token).persistence(persistence).build()
     app.add_handler(TypeHandler(Update, gate), group=-1)
     app.add_handler(CommandHandler(["start", "help"], start))
-    app.add_handler(CommandHandler("dota", dota))
+    app.add_handler(CommandHandler(["readycheck", "rc"], readycheck))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^status:"))
     app.add_handler(MessageHandler(filters.StatusUpdate.PINNED_MESSAGE, drop_pin_notice))
