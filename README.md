@@ -1,0 +1,46 @@
+# five_ready_check_bot
+
+A Telegram ready-check bot for a Dota group. `/dota` posts a ready check, everyone taps a button, and once 5 people are **✅ At my desk** the bot pings them all to get in.
+
+## Commands
+
+- `/dota`: start a ready check for the default number of players (`PLAYERS_NEEDED`, 5)
+- `/dota 10`: wait for 10 players instead
+- `/cancel`: remove the current ready check
+- `/help`: show the commands
+
+Buttons: **✅ At my desk**, **⏳ Soon**, **🕙 Later**, **❌ Not tonight**. Tap the one you already picked to clear it.
+
+## Behaviour
+
+- **One live check per group.** A new `/dota` replaces the old one. The bot deletes the old message, or, past Telegram's 48h limit on deleting, marks it "Replaced" and removes its buttons. `/cancel` works the same way.
+- **The "get in!" ping** goes out once the target is reached. If someone drops after that, the rest are told.
+- **Survives restarts.** Ready checks are saved to `PERSISTENCE_FILE` (`/data/dotabot.pickle` in the image), so buttons keep working after a redeploy or reboot. Mount `/data` as a volume.
+- **Expires** after `EXPIRE_HOURS` (6), so last night's check can't fire a ping the next day.
+- **Nudges "Soon".** Anyone who has been on ⏳ Soon for `SOON_NUDGE_MINUTES` (15) while the group is still short gets one ping. That's one per person per check.
+- **Pins the check** if the bot is a group admin with "Pin messages". Without that it still works, just unpinned.
+
+## Settings
+
+| Variable | Default | |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | (required) | From @BotFather |
+| `PLAYERS_NEEDED` | `5` | Default player count |
+| `EXPIRE_HOURS` | `6` | Ready-check lifetime |
+| `SOON_NUDGE_MINUTES` | `15` | When to nudge "Soon" |
+| `PERSISTENCE_FILE` | `/data/dotabot.pickle` | Where checks are saved |
+
+## Running it
+
+Standalone: `cp .env.example .env`, fill in the token, then `docker compose up -d --build`.
+
+In the homelab, it runs from the `rickyxsosa/Docker` stack using `ghcr.io/rickyxsosa/five_ready_check_bot:latest`, which GitHub Actions publishes on every push to `main` (see `.github/workflows/image.yml`).
+
+## Tests
+
+```bash
+pip install -r requirements.txt
+python test_bot.py
+```
+
+The tests drive the handlers with fake Telegram objects, with no network. CI runs them before publishing.

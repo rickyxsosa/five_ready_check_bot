@@ -1,0 +1,10 @@
+# For running the bot on its own. In the homelab it runs from the
+# rickyxsosa/Docker stack using the published GHCR image instead.
+services:
+  dotabot:
+    build: .
+    container_name: dotabot
+    env_file: .env
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

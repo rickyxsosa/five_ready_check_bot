@@ -1,0 +1,6 @@
+.env
+.git
+.github
+data
+test_bot.py
+__pycache__
