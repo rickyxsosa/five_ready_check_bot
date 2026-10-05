@@ -26,9 +26,11 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
     PersistenceInput,
     PicklePersistence,
     TypeHandler,
+    filters,
 )
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
@@ -42,6 +44,7 @@ PERSISTENCE_FILE = os.environ.get("PERSISTENCE_FILE", "/data/dotabot.pickle")
 EXPIRE_SECONDS = float(os.environ.get("EXPIRE_HOURS", "6")) * 3600
 NUDGE_SECONDS = float(os.environ.get("SOON_NUDGE_MINUTES", "15")) * 60
 TICK_SECONDS = 60
+TRANSIENT_SECONDS = 30
 SOURCE_URL = "https://github.com/rickyxsosa/five_ready_check_bot"
 
 
@@ -157,7 +160,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def tidy_command(update: Update) -> None:
+    """Delete the /dota or /cancel someone typed, so the chat shows the ready
+    check and not a trail of commands. Deleting other people's messages needs
+    admin with "Delete messages"; without it the command just stays."""
+    try:
+        await update.effective_message.delete()
+    except TelegramError as e:
+        log.info("could not delete command in chat %s: %s", update.effective_chat.id, e)
+
+
+async def delete_later(context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id, message_id = context.job.data
+    try:
+        await context.bot.delete_message(chat_id, message_id)
+    except TelegramError as e:
+        log.info("could not delete transient message %s: %s", message_id, e)
+
+
+async def say_briefly(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    """A short reply that cleans itself up. Sent, not replied, because the
+    command it answers may already be deleted. Not persisted: a restart in the
+    next 30 seconds leaves it in the chat, which is harmless."""
+    msg = await update.effective_chat.send_message(text)
+    context.job_queue.run_once(delete_later, TRANSIENT_SECONDS, data=(msg.chat_id, msg.message_id))
+
+
+async def drop_pin_notice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Telegram posts "<bot> pinned a message" for every pin; that is pure noise
+    msg = update.effective_message
+    if msg.from_user and msg.from_user.id == context.bot.id:
+        try:
+            await msg.delete()
+        except TelegramError as e:
+            log.info("could not delete pin notice in chat %s: %s", msg.chat_id, e)
+
+
 async def dota(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await tidy_command(update)
     needed = DEFAULT_NEEDED
     if context.args:
         try:
@@ -186,13 +226,14 @@ async def dota(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await tidy_command(update)
     poll = context.chat_data.pop("poll", None)
     if poll is None:
-        await update.effective_message.reply_text("There's no ready check to cancel. Start one with /dota")
+        await say_briefly(update, context, "There's no ready check to cancel. Start one with /dota")
         return
     name = update.effective_user.first_name
     await retire(context.bot, update.effective_chat.id, poll, f"❌ <i>Cancelled by {html.escape(name)}.</i>")
-    await update.effective_message.reply_text(f"Ready check cancelled by {name}.")
+    await say_briefly(update, context, f"Ready check cancelled by {name}.")
 
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -306,6 +347,7 @@ def main() -> None:
     app.add_handler(CommandHandler("dota", dota))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^status:"))
+    app.add_handler(MessageHandler(filters.StatusUpdate.PINNED_MESSAGE, drop_pin_notice))
     app.job_queue.run_repeating(tick, interval=TICK_SECONDS, first=TICK_SECONDS, name="tick")
 
     if ALLOWED_CHAT_IDS:

@@ -19,6 +19,9 @@ Buttons: **✅ At my desk**, **⏳ Soon**, **🕙 Later**, **❌ Not tonight**. 
 - **Expires** after `EXPIRE_HOURS` (6), so last night's check can't fire a ping the next day.
 - **Nudges "Soon".** Anyone who has been on ⏳ Soon for `SOON_NUDGE_MINUTES` (15) while the group is still short gets one ping. That's one per person per check.
 - **Pins the check** if the bot is a group admin with "Pin messages". Without that it still works, just unpinned.
+- **Keeps the chat tidy.** It deletes the `/dota` and `/cancel` people type, and Telegram's "pinned a message" notice. Short replies like "cancelled by …" delete themselves after 30 seconds. Deleting other people's messages needs admin with "Delete messages"; without it the commands just stay.
+
+For the full experience, make the bot a group admin with only **Pin messages** and **Delete messages** turned on.
 
 ## Keeping your bot to your own group
 

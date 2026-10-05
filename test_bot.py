@@ -42,19 +42,32 @@ class FakeBot:
 
 async def send_message(text, **kw):
     next_id[0] += 1
-    calls.append(("send", next_id[0]))
-    return NS(message_id=next_id[0])
+    calls.append(("send", next_id[0], text))
+    return NS(message_id=next_id[0], chat_id=1)
 
 
 async def reply_text(text, **kw):
     calls.append(("reply", text))
 
 
-def make(**bot_kw):
-    ctx = NS(bot=FakeBot(**bot_kw), chat_data={}, args=[])
+class FakeJobQueue:
+    def __init__(self):
+        self.jobs = []
+
+    def run_once(self, callback, when, data=None):
+        self.jobs.append((callback, when, data))
+
+
+def make(can_delete_commands=True, **bot_kw):
+    async def delete_command():
+        if not can_delete_commands:
+            raise BadRequest("Message can't be deleted")
+        calls.append(("delcmd",))
+
+    ctx = NS(bot=FakeBot(**bot_kw), chat_data={}, args=[], job_queue=FakeJobQueue())
     upd = NS(
         effective_chat=NS(id=1, send_message=send_message),
-        effective_message=NS(reply_text=reply_text),
+        effective_message=NS(reply_text=reply_text, delete=delete_command),
         effective_user=NS(first_name="Ricky"),
     )
     return ctx, upd
@@ -84,7 +97,7 @@ async def test_cancel_and_replace():
     calls.clear()
     ctx, upd = make()
     await bot.cancel(upd, ctx)
-    assert calls[-1][0] == "reply" and "no ready check" in calls[-1][1]
+    assert calls[-1][0] == "send" and "no ready check" in calls[-1][2]
 
     await bot.dota(upd, ctx)
     first = ctx.chat_data["poll"]["message_id"]
@@ -105,10 +118,11 @@ async def test_old_message_falls_back_to_edit_and_unpin():
     ctx, upd = make(fail_delete=True)
     await bot.dota(upd, ctx)
     mid = ctx.chat_data["poll"]["message_id"]
+    calls.clear()
     await bot.cancel(upd, ctx)
     kinds = [c[0] for c in calls]
-    assert kinds == ["send", "pin", "delete", "edit", "unpin", "reply"], calls
-    assert "Cancelled by Ricky" in calls[3][2]
+    assert kinds == ["delcmd", "delete", "edit", "unpin", "send"], calls
+    assert "Cancelled by Ricky" in calls[2][2]
     assert ("unpin", mid) in calls
 
 
@@ -117,6 +131,46 @@ async def test_pin_without_admin_still_works():
     ctx, upd = make(can_pin=False)
     await bot.dota(upd, ctx)
     assert "poll" in ctx.chat_data and not ctx.chat_data["poll"].get("pinned")
+
+
+async def test_commands_are_tidied():
+    calls.clear()
+    ctx, upd = make()
+    await bot.dota(upd, ctx)
+    assert calls[0] == ("delcmd",), calls
+    await bot.cancel(upd, ctx)
+    assert calls.count(("delcmd",)) == 2
+
+    # The cancel confirmation is scheduled to delete itself
+    confirm = calls[-1]
+    assert confirm[0] == "send" and "cancelled by Ricky" in confirm[2]
+    callback, when, data = ctx.job_queue.jobs[-1]
+    assert callback is bot.delete_later and when == bot.TRANSIENT_SECONDS and data == (1, confirm[1])
+    calls.clear()
+    await callback(NS(bot=ctx.bot, job=NS(data=data)))
+    assert calls == [("delete", confirm[1])]
+
+
+async def test_no_delete_rights_still_works():
+    calls.clear()
+    ctx, upd = make(can_delete_commands=False)
+    await bot.dota(upd, ctx)
+    assert "poll" in ctx.chat_data and ("delcmd",) not in calls
+
+
+async def test_pin_notice_dropped_only_for_our_pins():
+    deleted = []
+
+    async def delete():
+        deleted.append(True)
+
+    ctx = NS(bot=NS(id=42))
+    ours = NS(effective_message=NS(from_user=NS(id=42), chat_id=1, delete=delete))
+    theirs = NS(effective_message=NS(from_user=NS(id=7), chat_id=1, delete=delete))
+    await bot.drop_pin_notice(theirs, ctx)
+    assert deleted == []
+    await bot.drop_pin_notice(ours, ctx)
+    assert deleted == [True]
 
 
 async def test_expiry():
