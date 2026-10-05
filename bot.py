@@ -33,6 +33,8 @@ from telegram.ext import (
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+# The 60s tick would otherwise log two lines a minute, every minute
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
 log = logging.getLogger("dotabot")
 
 DEFAULT_NEEDED = int(os.environ.get("PLAYERS_NEEDED", "5"))
