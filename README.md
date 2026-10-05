@@ -20,11 +20,21 @@ Buttons: **✅ At my desk**, **⏳ Soon**, **🕙 Later**, **❌ Not tonight**. 
 - **Nudges "Soon".** Anyone who has been on ⏳ Soon for `SOON_NUDGE_MINUTES` (15) while the group is still short gets one ping. That's one per person per check.
 - **Pins the check** if the bot is a group admin with "Pin messages". Without that it still works, just unpinned.
 
+## Keeping your bot to your own group
+
+A bot's @username is public, so anyone can message it or add it to their group, and your server would serve them. To stop that:
+
+1. Set `ALLOWED_CHAT_IDS` to your group's chat id. To find it, leave the setting empty, run `/dota` in your group, and read it from the log line `ready check in chat -100…`. Separate several ids with commas.
+2. In @BotFather, send `/setjoingroups` and choose **Disable** once the bot is in your group.
+
+With the list set, the bot leaves any other group it is added to, and answers a stranger's direct message with a pointer to this repo.
+
 ## Settings
 
 | Variable | Default | |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | (required) | From @BotFather |
+| `ALLOWED_CHAT_IDS` | (empty: any chat) | Chat ids the bot works in |
 | `PLAYERS_NEEDED` | `5` | Default player count |
 | `EXPIRE_HOURS` | `6` | Ready-check lifetime |
 | `SOON_NUDGE_MINUTES` | `15` | When to nudge "Soon" |

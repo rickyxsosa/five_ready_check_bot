@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace as NS
 
 from telegram.error import BadRequest
+from telegram.ext import ApplicationHandlerStop
 
 import bot
 
@@ -34,6 +35,9 @@ class FakeBot:
 
     async def send_message(self, chat_id, text, **kw):
         calls.append(("message", text))
+
+    async def leave_chat(self, chat_id):
+        calls.append(("leave", chat_id))
 
 
 async def send_message(text, **kw):
@@ -148,6 +152,68 @@ async def test_soon_nudge_once_and_only_when_short():
     await press(ctx, poll["message_id"], 10, "Cy", "soon")
     poll["votes"][10] = ("Cy", "soon", since)
     assert not await bot.check_poll(ctx.bot, 1, ctx.chat_data, since + bot.NUDGE_SECONDS)
+
+
+def gate_update(chat_id, chat_type, text=None, callback=False):
+    answered = []
+
+    async def answer(*a, **kw):
+        answered.append(True)
+
+    msg = NS(text=text, reply_text=reply_text) if text is not None else None
+    upd = NS(
+        effective_chat=NS(id=chat_id, type=chat_type, title="Some group"),
+        message=msg,
+        callback_query=NS(answer=answer) if callback else None,
+    )
+    return upd, answered
+
+
+async def gated(upd, ctx):
+    try:
+        await bot.gate(upd, ctx)
+    except ApplicationHandlerStop:
+        return True
+    return False
+
+
+async def test_allow_list():
+    assert bot.parse_chat_ids("-1001, 42  7") == {-1001, 42, 7}
+    assert bot.parse_chat_ids("") == frozenset()
+    ctx, _ = make()
+    saved = bot.ALLOWED_CHAT_IDS
+    try:
+        # Open mode: everything passes
+        bot.ALLOWED_CHAT_IDS = frozenset()
+        upd, _ = gate_update(-999, "supergroup", "/dota")
+        assert not await gated(upd, ctx)
+
+        bot.ALLOWED_CHAT_IDS = frozenset({-1001})
+        upd, _ = gate_update(-1001, "supergroup", "/dota")
+        assert not await gated(upd, ctx)
+
+        # A stranger's group: stopped, and the bot leaves
+        calls.clear()
+        upd, _ = gate_update(-999, "supergroup", "/dota")
+        assert await gated(upd, ctx) and ("leave", -999) in calls
+
+        # A stranger's DM: stopped, one pointer to the source, no leave
+        calls.clear()
+        upd, _ = gate_update(555, "private", "/dota")
+        assert await gated(upd, ctx)
+        assert [c[0] for c in calls] == ["reply"] and bot.SOURCE_URL in calls[0][1]
+
+        # Plain chatter in a stranger's DM gets no reply at all
+        calls.clear()
+        upd, _ = gate_update(555, "private", "hello")
+        assert await gated(upd, ctx) and calls == []
+
+        # A button press from an old message in a stranger's group: answered, stopped
+        calls.clear()
+        upd, answered = gate_update(-999, "supergroup", callback=True)
+        assert await gated(upd, ctx) and answered
+    finally:
+        bot.ALLOWED_CHAT_IDS = saved
 
 
 async def main():

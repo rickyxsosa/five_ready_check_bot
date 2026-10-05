@@ -8,6 +8,8 @@
 Ready checks are saved to PERSISTENCE_FILE, so a restart keeps them working.
 A background tick expires checks after EXPIRE_HOURS and nudges anyone who has
 sat on "Soon" for SOON_NUDGE_MINUTES while the group is still short.
+
+Set ALLOWED_CHAT_IDS to keep a deployed bot to your own group(s).
 """
 
 import html
@@ -20,11 +22,13 @@ from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     PersistenceInput,
     PicklePersistence,
+    TypeHandler,
 )
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
@@ -36,6 +40,16 @@ PERSISTENCE_FILE = os.environ.get("PERSISTENCE_FILE", "/data/dotabot.pickle")
 EXPIRE_SECONDS = float(os.environ.get("EXPIRE_HOURS", "6")) * 3600
 NUDGE_SECONDS = float(os.environ.get("SOON_NUDGE_MINUTES", "15")) * 60
 TICK_SECONDS = 60
+SOURCE_URL = "https://github.com/rickyxsosa/five_ready_check_bot"
+
+
+def parse_chat_ids(raw: str) -> frozenset[int]:
+    return frozenset(int(part) for part in raw.replace(",", " ").split())
+
+
+# Empty means open to any chat, which is what a fresh self-hosted copy wants.
+# Set it and the bot only works in those chats, and leaves any other group.
+ALLOWED_CHAT_IDS = parse_chat_ids(os.environ.get("ALLOWED_CHAT_IDS", ""))
 
 STATUSES = {
     "ready": "✅ At my desk",
@@ -103,6 +117,34 @@ async def retire(bot, chat_id: int, poll: dict, note: str) -> None:
             await bot.unpin_chat_message(chat_id, message_id=poll["message_id"])
         except TelegramError as e:
             log.info("could not unpin ready check %s: %s", poll["message_id"], e)
+
+
+async def gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Runs before every handler. Lets allowed chats through and shuts out the rest."""
+    chat = update.effective_chat
+    if chat is None:
+        return
+    if not ALLOWED_CHAT_IDS:
+        if update.message and update.message.text and update.message.text.startswith("/dota"):
+            # Open mode: log ids so the owner can find theirs for ALLOWED_CHAT_IDS
+            log.info("ready check in chat %s (%s)", chat.id, chat.title or chat.type)
+        return
+    if chat.id in ALLOWED_CHAT_IDS:
+        return
+
+    log.info("ignoring chat %s (%s): not in ALLOWED_CHAT_IDS", chat.id, chat.title or chat.type)
+    if update.callback_query:
+        await update.callback_query.answer()
+    if chat.type == "private":
+        msg = update.message
+        if msg and msg.text and msg.text.startswith("/"):
+            await msg.reply_text(f"This bot is private. Host your own copy: {SOURCE_URL}")
+    else:
+        try:
+            await context.bot.leave_chat(chat.id)
+        except TelegramError as e:
+            log.info("could not leave chat %s: %s", chat.id, e)
+    raise ApplicationHandlerStop
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -257,13 +299,17 @@ def main() -> None:
         store_data=PersistenceInput(bot_data=False, user_data=False, callback_data=False),
     )
     app = Application.builder().token(token).persistence(persistence).build()
+    app.add_handler(TypeHandler(Update, gate), group=-1)
     app.add_handler(CommandHandler(["start", "help"], start))
     app.add_handler(CommandHandler("dota", dota))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^status:"))
     app.job_queue.run_repeating(tick, interval=TICK_SECONDS, first=TICK_SECONDS, name="tick")
 
-    log.info("Bot started")
+    if ALLOWED_CHAT_IDS:
+        log.info("Bot started, limited to chats %s", sorted(ALLOWED_CHAT_IDS))
+    else:
+        log.info("Bot started, open to every chat (ALLOWED_CHAT_IDS is not set)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
