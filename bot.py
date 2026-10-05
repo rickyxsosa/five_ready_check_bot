@@ -50,6 +50,7 @@ TICK_SECONDS = 60
 TRANSIENT_SECONDS = 30
 SOURCE_URL = "https://github.com/rickyxsosa/five_ready_check_bot"
 MAX_GAME_NAME = 40
+MAX_BAR = 10
 
 
 def parse_chat_ids(raw: str) -> frozenset[int]:
@@ -69,6 +70,7 @@ STATUSES = {
 
 # A poll, as stored in chat_data["poll"]:
 #   game        game name as typed, or None for a plain ready check
+#   by          first name of whoever started it
 #   needed      players required
 #   votes       {user_id: (first_name, status, since)}, since = when that status was set
 #   pinged      whether the "get in!" ping has gone out
@@ -110,16 +112,30 @@ def game_label(poll: dict) -> str:
     return html.escape(game) if game else ""
 
 
+def progress(ready: int, needed: int) -> str:
+    # Past 10 squares the bar wraps on a phone, so big checks get the count only
+    if needed > MAX_BAR:
+        return f"{ready}/{needed} ready"
+    filled = min(ready, needed)
+    return "🟩" * filled + "⬜" * (needed - filled) + f"  {ready}/{needed} ready"
+
+
 def render(poll: dict, note: str | None = None) -> str:
+    # Telegram gives bots no font sizes, so the title earns its weight from
+    # capitals, bold and a line of its own, with the stakes on the line below
     ready = len(ready_users(poll))
     needed = poll["needed"]
-    game = game_label(poll)
+    # Upper-case before escaping, or "&amp;" would become "&AMP;"
+    game = html.escape((poll.get("game") or "").upper())
     if ready >= needed:
-        header = f"🎮 <b>GAME ON — {game}!</b>" if game else "🎮 <b>GAME ON!</b>"
+        title = f"🎮 <b>GAME ON: {game}!</b>" if game else "🎮 <b>GAME ON!</b>"
     else:
-        header = f"🎮 <b>{game}?</b>" if game else "🎮 <b>Ready check?</b>"
+        title = f"🎮 <b>READY CHECK: {game}</b>" if game else "🎮 <b>READY CHECK</b>"
+    by = poll.get("by")  # absent on checks saved before it was recorded
+    subtitle = f"Started by {html.escape(by)} · needs {needed}" if by else f"Needs {needed}"
+
     lines = [note, ""] if note else []
-    lines += [f"{header} ({ready}/{needed} ready)", ""]
+    lines += [title, subtitle, progress(ready, needed), ""]
     for key, label in STATUSES.items():
         names = [html.escape(name) for name, status, _ in poll["votes"].values() if status == key]
         lines.append(f"{label}: {', '.join(names) if names else '—'}")
@@ -243,7 +259,7 @@ async def readycheck(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if old:
         await retire(context.bot, chat.id, old, "🔁 <i>Replaced by a newer ready check.</i>")
 
-    poll = {"game": game, "needed": needed, "votes": {}, "pinged": False, "created": time.time(), "nudged": set()}
+    poll = {"game": game, "by": update.effective_user.first_name, "needed": needed, "votes": {}, "pinged": False, "created": time.time(), "nudged": set()}
     msg = await chat.send_message(render(poll), reply_markup=keyboard(), parse_mode=ParseMode.HTML)
     poll["message_id"] = msg.message_id
     context.chat_data["poll"] = poll

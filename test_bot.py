@@ -228,7 +228,10 @@ async def test_game_names_and_remembered_counts():
     await bot.readycheck(upd, ctx)
     poll = ctx.chat_data["poll"]
     assert poll["game"] == "STS" and poll["needed"] == 4
-    assert "<b>STS?</b> (0/4 ready)" in bot.render(poll)
+    text = bot.render(poll).splitlines()
+    assert text[0] == "🎮 <b>READY CHECK: STS</b>", text
+    assert text[1] == "Started by Ricky · needs 4"
+    assert text[2] == "⬜⬜⬜⬜  0/4 ready"
 
     # Same game, no number: remembers 4, whatever the case
     ctx.args = ["sts"]
@@ -244,15 +247,22 @@ async def test_game_names_and_remembered_counts():
     ctx.args = []
     await bot.readycheck(upd, ctx)
     poll = ctx.chat_data["poll"]
-    assert poll["game"] is None and "Ready check?" in bot.render(poll)
+    assert poll["game"] is None and bot.render(poll).startswith("🎮 <b>READY CHECK</b>\n")
 
-    # Names are escaped, and the full-house header names the game
-    poll = {"game": "<b>R&D</b>", "needed": 1, "votes": {7: ("A", "ready", 0)}}
-    assert "GAME ON — &lt;b&gt;R&amp;D&lt;/b&gt;!" in bot.render(poll)
+    # Names are upper-cased then escaped, and the full-house title names the game
+    poll = {"game": "<b>R&d</b>", "needed": 1, "votes": {7: ("A", "ready", 0)}}
+    text = bot.render(poll)
+    assert "GAME ON: &lt;B&gt;R&amp;D&lt;/B&gt;!" in text and "&AMP;" not in text, text
+    assert "🟩  1/1 ready" in text
 
-    # Checks saved before games existed still render
+    # Over-full checks don't overflow the bar; big checks drop it
+    assert bot.progress(6, 5) == "🟩🟩🟩🟩🟩  6/5 ready"
+    assert bot.progress(3, 12) == "3/12 ready"
+
+    # Checks saved before games and starters were recorded still render
     old = {"needed": 5, "votes": {}}
-    assert "Ready check?" in bot.render(old)
+    lines = bot.render(old).splitlines()
+    assert lines[0] == "🎮 <b>READY CHECK</b>" and lines[1] == "Needs 5"
 
 
 def gate_update(chat_id, chat_type, text=None, callback=False):
