@@ -219,16 +219,22 @@ async def test_expiry():
 async def test_soon_nudge_once_and_only_when_short():
     calls.clear()
     ctx, upd = make()
+    assert bot.NUDGE_MINUTES == 30 and bot.STATUSES["soon"] == "⏳ Soon (30 min)"
     ctx.args = ["2"]
     await bot.readycheck(upd, ctx)
     poll = ctx.chat_data["poll"]
     await press(ctx, poll["message_id"], 7, "Sam", "soon")
     since = poll["votes"][7][2]
 
+    # "Later" is never nudged, however long it sits
+    await press(ctx, poll["message_id"], 11, "Lee", "later")
+    poll["votes"][11] = ("Lee", "later", since - 10 * bot.NUDGE_SECONDS)
+
     assert not await bot.check_poll(ctx.bot, 1, ctx.chat_data, since + bot.NUDGE_SECONDS - 1)
     assert await bot.check_poll(ctx.bot, 1, ctx.chat_data, since + bot.NUDGE_SECONDS)
     nudge = [c for c in calls if c[0] == "message"]
     assert len(nudge) == 1 and "Sam" in nudge[0][1] and "0/2" in nudge[0][1], nudge
+    assert "Lee" not in nudge[0][1]
     # Not again for the same person on the same check
     assert not await bot.check_poll(ctx.bot, 1, ctx.chat_data, since + 2 * bot.NUDGE_SECONDS)
 

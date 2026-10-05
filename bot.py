@@ -60,7 +60,8 @@ def parse_clock(raw: str) -> tuple[int, int]:
 # night; without it that is UTC.
 EXPIRE_AT = parse_clock(os.environ.get("EXPIRE_AT", "00:30"))
 ZONE = ZoneInfo(os.environ.get("TZ") or "UTC")
-NUDGE_SECONDS = float(os.environ.get("SOON_NUDGE_MINUTES", "15")) * 60
+NUDGE_MINUTES = int(os.environ.get("SOON_NUDGE_MINUTES", "30"))
+NUDGE_SECONDS = NUDGE_MINUTES * 60
 TICK_SECONDS = 60
 TRANSIENT_SECONDS = 30
 SOURCE_URL = "https://github.com/rickyxsosa/five_ready_check_bot"
@@ -78,7 +79,9 @@ ALLOWED_CHAT_IDS = parse_chat_ids(os.environ.get("ALLOWED_CHAT_IDS", ""))
 
 STATUSES = {
     "ready": "✅ At my desk",
-    "soon": "⏳ Soon",
+    # The label promises what the nudge does, so it is built from the same setting.
+    # "Later" gets no nudge at all.
+    "soon": f"⏳ Soon ({NUDGE_MINUTES} min)",
     "later": "🕙 Later",
     "out": "❌ Not tonight",
 }

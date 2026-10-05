@@ -12,7 +12,7 @@ A Telegram ready-check bot for any game. `/readycheck Dota 5` posts a ready chec
 - `/cancel`: remove the current ready check
 - `/help`: show the commands
 
-Buttons: **✅ At my desk**, **⏳ Soon**, **🕙 Later**, **❌ Not tonight**. Tap the one you already picked to clear it.
+Buttons: **✅ At my desk**, **⏳ Soon (30 min)**, **🕙 Later**, **❌ Not tonight**. Tap the one you already picked to clear it.
 
 ## Behaviour
 
@@ -20,7 +20,7 @@ Buttons: **✅ At my desk**, **⏳ Soon**, **🕙 Later**, **❌ Not tonight**. 
 - **The "get in!" ping** goes out once the target is reached. If someone drops after that, the rest are told.
 - **Survives restarts.** Ready checks are saved to `PERSISTENCE_FILE` (`/data/dotabot.pickle` in the image), so buttons keep working after a redeploy or reboot. Mount `/data` as a volume.
 - **Expires nightly** at `EXPIRE_AT` (00:30) in the `TZ` timezone, so last night's check can't fire a ping the next day. A check started at 00:10 closes 20 minutes later.
-- **Nudges "Soon".** Anyone who has been on ⏳ Soon for `SOON_NUDGE_MINUTES` (15) while the group is still short gets one ping. That's one per person per check.
+- **Nudges "Soon".** The button reads **⏳ Soon (30 min)**. Anyone still on it after `SOON_NUDGE_MINUTES` (30) while the group is short gets one ping, once per person per check. **🕙 Later** is never nudged.
 - **Pins the check** if the bot is a group admin with "Pin messages". Without that it still works, just unpinned.
 - **Keeps the chat tidy.** It deletes the `/readycheck` and `/cancel` people type, and Telegram's "pinned a message" notice. Short replies like "cancelled by …" delete themselves after 30 seconds. Deleting other people's messages needs admin with "Delete messages"; without it the commands just stay.
 
@@ -44,7 +44,7 @@ With the list set, the bot leaves any other group it is added to, and answers a 
 | `PLAYERS_NEEDED` | `5` | Default player count |
 | `EXPIRE_AT` | `00:30` | Local time (HH:MM) each night when open checks close |
 | `TZ` | UTC | Timezone for `EXPIRE_AT`, e.g. `America/Los_Angeles` |
-| `SOON_NUDGE_MINUTES` | `15` | When to nudge "Soon" |
+| `SOON_NUDGE_MINUTES` | `30` | When to nudge "Soon"; also shown on the button |
 | `PERSISTENCE_FILE` | `/data/dotabot.pickle` | Where checks are saved |
 
 ## Running it
