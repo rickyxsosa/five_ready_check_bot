@@ -33,6 +33,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    MessageReactionHandler,
     PersistenceInput,
     PicklePersistence,
     TypeHandler,
@@ -85,6 +86,9 @@ STATUSES = {
     "later": "🕙 Later",
     "out": "❌ Not tonight",
 }
+
+# Reacting to the live check is a shortcut for these buttons
+REACTIONS = {"👍": "ready", "👎": "out"}
 
 # A poll, as stored in chat_data["poll"]:
 #   game        game name as typed, or None for a plain ready check
@@ -302,6 +306,48 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await say_briefly(update, context, f"Ready check cancelled by {name}.")
 
 
+async def set_status(bot, chat_id: int, poll: dict, user_id: int, name: str, status: str | None) -> None:
+    """Record someone's status (None clears it), redraw the check, and send the
+    "get in!" or "dropped" ping if this crossed the line. Buttons and reactions
+    both come through here, so whichever someone used last wins."""
+    poll["votes"].pop(user_id, None)  # re-insert so lists stay in order of last change
+    if status is not None:
+        poll["votes"][user_id] = (name, status, time.time())
+
+    try:
+        await bot.edit_message_text(
+            render(poll), chat_id=chat_id, message_id=poll["message_id"],
+            reply_markup=keyboard(), parse_mode=ParseMode.HTML,
+        )
+    except BadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise
+
+    ready = ready_users(poll)
+    needed = poll["needed"]
+    reply = ReplyParameters(poll["message_id"], allow_sending_without_reply=True)
+    if len(ready) >= needed and not poll["pinged"]:
+        poll["pinged"] = True
+        mentions = " ".join(mention(uid, n) for uid, n in ready)
+        game = game_label(poll)
+        await bot.send_message(
+            chat_id,
+            f"🎮 <b>{len(ready)} ready{' for ' + game if game else ''} — get in!</b>\n{mentions}",
+            parse_mode=ParseMode.HTML,
+            reply_parameters=reply,
+        )
+    elif len(ready) < needed and poll["pinged"]:
+        # Someone dropped after we called it, so let the others know
+        poll["pinged"] = False
+        mentions = " ".join(mention(uid, n) for uid, n in ready)
+        await bot.send_message(
+            chat_id,
+            f"⚠️ {html.escape(name)} dropped. Back to {len(ready)}/{needed}.\n{mentions}",
+            parse_mode=ParseMode.HTML,
+            reply_parameters=reply,
+        )
+
+
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     poll = context.chat_data.get("poll")
@@ -312,39 +358,40 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = query.from_user
     status = query.data.split(":", 1)[1]
     current = poll["votes"].get(user.id)
-
     if current and current[1] == status:
-        del poll["votes"][user.id]
-        await query.answer("Status cleared")
-    else:
-        poll["votes"].pop(user.id, None)  # re-insert so lists stay in order of last change
-        poll["votes"][user.id] = (user.first_name, status, time.time())
-        await query.answer(STATUSES[status])
+        status = None  # tapping your current status clears it
+    await query.answer(STATUSES[status] if status else "Status cleared")
+    await set_status(context.bot, query.message.chat_id, poll, user.id, user.first_name, status)
 
-    try:
-        await query.edit_message_text(render(poll), reply_markup=keyboard(), parse_mode=ParseMode.HTML)
-    except BadRequest as e:
-        if "not modified" not in str(e).lower():
-            raise
 
-    ready = ready_users(poll)
-    needed = poll["needed"]
-    if len(ready) >= needed and not poll["pinged"]:
-        poll["pinged"] = True
-        mentions = " ".join(mention(uid, name) for uid, name in ready)
-        game = game_label(poll)
-        await query.message.reply_text(
-            f"🎮 <b>{len(ready)} ready{' for ' + game if game else ''} — get in!</b>\n{mentions}",
-            parse_mode=ParseMode.HTML,
-        )
-    elif len(ready) < needed and poll["pinged"]:
-        # Someone dropped after we called it, so let the others know
-        poll["pinged"] = False
-        mentions = " ".join(mention(uid, name) for uid, name in ready)
-        await query.message.reply_text(
-            f"⚠️ {html.escape(user.first_name)} dropped. Back to {len(ready)}/{needed}.\n{mentions}",
-            parse_mode=ParseMode.HTML,
-        )
+def emojis(reactions) -> set[str]:
+    # Custom-emoji and paid reactions have no .emoji; they never mean a status
+    return {r.emoji for r in reactions if getattr(r, "emoji", None)}
+
+
+async def on_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """👍 on the live check means At my desk, 👎 means Not tonight, and taking the
+    reaction away clears it. Telegram only sends these to admin bots. Reactions
+    from anonymous admins carry no user, so they can't count."""
+    change = update.message_reaction
+    poll = context.chat_data.get("poll")
+    if change.user is None or poll is None or poll["message_id"] != change.message_id:
+        return
+
+    old, new = emojis(change.old_reaction), emojis(change.new_reaction)
+    added, removed = new - old, old - new
+    current = poll["votes"].get(change.user.id)
+    current_status = current[1] if current else None
+
+    status = next((REACTIONS[e] for e in added if e in REACTIONS), None)
+    if status is None:
+        # Only clear if the reaction taken away is what set the current status,
+        # so removing a stale 👍 after tapping "Soon" leaves "Soon" alone
+        if not any(REACTIONS.get(e) == current_status for e in removed):
+            return
+    elif status == current_status:
+        return
+    await set_status(context.bot, change.chat.id, poll, change.user.id, change.user.first_name, status)
 
 
 def expires_at(created: float) -> float:
@@ -426,6 +473,7 @@ def main() -> None:
     app.add_handler(CommandHandler(["readycheck", "rc"], readycheck))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^status:"))
+    app.add_handler(MessageReactionHandler(on_reaction, MessageReactionHandler.MESSAGE_REACTION_UPDATED))
     app.add_handler(MessageHandler(filters.StatusUpdate.PINNED_MESSAGE, drop_pin_notice))
     app.job_queue.run_repeating(tick, interval=TICK_SECONDS, first=TICK_SECONDS, name="tick")
 

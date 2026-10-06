@@ -24,7 +24,7 @@ class FakeBot:
         if self.fail_delete:
             raise BadRequest("Message can't be deleted")
 
-    async def edit_message_text(self, text, chat_id, message_id, parse_mode):
+    async def edit_message_text(self, text, chat_id, message_id, parse_mode, reply_markup=None):
         calls.append(("edit", message_id, text.splitlines()[0]))
 
     async def pin_chat_message(self, chat_id, message_id, disable_notification=False):
@@ -85,7 +85,7 @@ async def press(ctx, message_id, uid, name, status):
         pass
 
     q = NS(
-        message=NS(message_id=message_id, reply_text=reply_text),
+        message=NS(message_id=message_id, chat_id=1),
         answer=answer,
         edit_message_text=edit,
         data=f"status:{status}",
@@ -244,6 +244,62 @@ async def test_soon_nudge_once_and_only_when_short():
     await press(ctx, poll["message_id"], 10, "Cy", "soon")
     poll["votes"][10] = ("Cy", "soon", since)
     assert not await bot.check_poll(ctx.bot, 1, ctx.chat_data, since + bot.NUDGE_SECONDS)
+
+
+async def react(ctx, message_id, uid, name, old, new, anonymous=False):
+    emoji = lambda e: NS(emoji=e)  # noqa: E731
+    change = NS(
+        user=None if anonymous else NS(id=uid, first_name=name),
+        chat=NS(id=1),
+        message_id=message_id,
+        old_reaction=[emoji(e) for e in old],
+        new_reaction=[emoji(e) for e in new],
+    )
+    await bot.on_reaction(NS(message_reaction=change), ctx)
+
+
+def status_of(ctx, uid):
+    vote = ctx.chat_data["poll"]["votes"].get(uid)
+    return vote[1] if vote else None
+
+
+async def test_reactions_set_and_clear_status():
+    calls.clear()
+    ctx, upd = make()
+    ctx.args = ["Dota", "2"]
+    await bot.readycheck(upd, ctx)
+    mid = ctx.chat_data["poll"]["message_id"]
+
+    await react(ctx, mid, 7, "Sam", [], ["👍"])
+    assert status_of(ctx, 7) == "ready"
+    await react(ctx, mid, 7, "Sam", ["👍"], ["👎"])
+    assert status_of(ctx, 7) == "out"
+    await react(ctx, mid, 7, "Sam", ["👎"], [])
+    assert status_of(ctx, 7) is None
+
+    # Any other emoji means nothing
+    await react(ctx, mid, 7, "Sam", [], ["🔥"])
+    assert status_of(ctx, 7) is None
+
+    # A button after a reaction wins; then removing the stale 👍 leaves the button's choice
+    await react(ctx, mid, 7, "Sam", [], ["👍"])
+    await press(ctx, mid, 7, "Sam", "soon")
+    assert status_of(ctx, 7) == "soon"
+    await react(ctx, mid, 7, "Sam", ["👍"], [])
+    assert status_of(ctx, 7) == "soon"
+
+    # Anonymous admins and reactions on other messages are ignored
+    await react(ctx, mid, 8, "Anon", [], ["👍"], anonymous=True)
+    await react(ctx, mid - 1, 9, "Bo", [], ["👍"])
+    assert 8 not in ctx.chat_data["poll"]["votes"] and 9 not in ctx.chat_data["poll"]["votes"]
+
+    # Reactions count toward the target and fire the ping
+    calls.clear()
+    await react(ctx, mid, 9, "Bo", [], ["👍"])
+    await react(ctx, mid, 10, "Cy", [], ["👍"])
+    pings = [c for c in calls if c[0] == "message"]
+    assert len(pings) == 1 and "2 ready for Dota" in pings[0][1], calls
+    assert "GAME ON" in [c for c in calls if c[0] == "edit"][-1][2]
 
 
 def test_parse_args():

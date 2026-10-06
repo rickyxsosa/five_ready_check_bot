@@ -14,6 +14,8 @@ A Telegram ready-check bot for any game. `/readycheck Dota 5` posts a ready chec
 
 Buttons: **✅ At my desk**, **⏳ Soon (30 min)**, **🕙 Later**, **❌ Not tonight**. Tap the one you already picked to clear it.
 
+**Reactions work too:** react 👍 to the ready check for **At my desk** or 👎 for **Not tonight**, and remove the reaction to clear it. Whichever you used last, button or reaction, counts. This needs the bot to be a group admin, because Telegram only tells admin bots about reactions. Bots can't change anyone's reactions, so after a 👍 followed by tapping **Soon**, the 👍 stays on the message while the list says Soon.
+
 ## Behaviour
 
 - **One live check per group.** A new `/readycheck` replaces the old one, whatever the game. The bot deletes the old message, or, past Telegram's 48h limit on deleting, marks it "Replaced" and removes its buttons. `/cancel` works the same way.
