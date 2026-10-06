@@ -1,8 +1,8 @@
 """Telegram ready-check bot for any game.
 
 /readycheck [game] [n]  - start a ready check, e.g. "/readycheck Dota 5".
-                          Everyone taps a button; when n people are "At my
-                          desk" the bot pings them all. The game is optional,
+                          Everyone taps a button; when n people are "Ready"
+                          the bot pings them all. The game is optional,
                           and n defaults to the last count used for that game
                           in this chat, else PLAYERS_NEEDED. Replaces the
                           chat's previous ready check. /rc is an alias.
@@ -79,7 +79,7 @@ def parse_chat_ids(raw: str) -> frozenset[int]:
 ALLOWED_CHAT_IDS = parse_chat_ids(os.environ.get("ALLOWED_CHAT_IDS", ""))
 
 STATUSES = {
-    "ready": "✅ At my desk",
+    "ready": "✅ Ready",
     # The label promises what the nudge does, so it is built from the same setting.
     # "Later" gets no nudge at all.
     "soon": f"⏳ Soon ({NUDGE_MINUTES} min)",
@@ -219,7 +219,7 @@ async def gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         "/readycheck Dota 5 starts a ready check for Dota that needs 5 players. "
-        "When enough people are at their desk, I'll ping them all.\n"
+        "When enough people are ready, I'll ping them all.\n"
         "The game and number are optional. I remember each game's number, so next time /readycheck Dota is enough. "
         f"A new game defaults to {DEFAULT_NEEDED}.\n"
         "/rc works the same. /cancel removes the current ready check, and a new one replaces it."
@@ -370,7 +370,7 @@ def emojis(reactions) -> set[str]:
 
 
 async def on_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """👍 on the live check means At my desk, 👎 means Not tonight, and taking the
+    """👍 on the live check means Ready, 👎 means Not tonight, and taking the
     reaction away clears it. Telegram only sends these to admin bots. Reactions
     from anonymous admins carry no user, so they can't count."""
     change = update.message_reaction
@@ -432,7 +432,7 @@ async def check_poll(bot, chat_id: int, data: dict, now: float) -> bool:
     mentions = " ".join(mention(uid, name) for uid, name in due)
     await bot.send_message(
         chat_id,
-        f"⏳ {mentions}, you said soon. {len(ready)}/{needed} at their desk.",
+        f"⏳ {mentions}, you said soon. {len(ready)}/{needed} ready.",
         parse_mode=ParseMode.HTML,
         reply_parameters=ReplyParameters(poll["message_id"], allow_sending_without_reply=True),
     )

@@ -1,6 +1,6 @@
 # five_ready_check_bot
 
-A Telegram ready-check bot for any game. `/readycheck Dota 5` posts a ready check, everyone taps a button, and once 5 people are **✅ At my desk** the bot pings them all to get in.
+A Telegram ready-check bot for any game. `/readycheck Dota 5` posts a ready check, everyone taps a button, and once 5 people are **✅ Ready** the bot pings them all to get in.
 
 ## Commands
 
@@ -12,9 +12,9 @@ A Telegram ready-check bot for any game. `/readycheck Dota 5` posts a ready chec
 - `/cancel`: remove the current ready check
 - `/help`: show the commands
 
-Buttons: **✅ At my desk**, **⏳ Soon (30 min)**, **🕙 Later**, **❌ Not tonight**. Tap the one you already picked to clear it.
+Buttons: **✅ Ready**, **⏳ Soon (30 min)**, **🕙 Later**, **❌ Not tonight**. Tap the one you already picked to clear it.
 
-**Reactions work too:** react 👍 to the ready check for **At my desk** or 👎 for **Not tonight**, and remove the reaction to clear it. Whichever you used last, button or reaction, counts. This needs the bot to be a group admin, because Telegram only tells admin bots about reactions. Bots can't change anyone's reactions, so after a 👍 followed by tapping **Soon**, the 👍 stays on the message while the list says Soon.
+**Reactions work too:** react 👍 to the ready check for **Ready** or 👎 for **Not tonight**, and remove the reaction to clear it. Whichever you used last, button or reaction, counts. This needs the bot to be a group admin, because Telegram only tells admin bots about reactions. Bots can't change anyone's reactions, so after a 👍 followed by tapping **Soon**, the 👍 stays on the message while the list says Soon.
 
 ## Behaviour
 
