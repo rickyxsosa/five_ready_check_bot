@@ -375,10 +375,25 @@ async def on_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     from anonymous admins carry no user, so they can't count."""
     change = update.message_reaction
     poll = context.chat_data.get("poll")
-    if change.user is None or poll is None or poll["message_id"] != change.message_id:
-        return
-
+    actor = getattr(change, "actor_chat", None)
+    who = change.user.first_name if change.user else f"anonymous ({getattr(actor, 'title', None)})"
     old, new = emojis(change.old_reaction), emojis(change.new_reaction)
+    # One line per reaction, whatever happens to it: reactions fail silently
+    # from the user's side, so the log is the only way to see why one didn't count
+    def outcome(result: str) -> None:
+        log.info(
+            "reaction in chat %s on message %s by %s: %s -> %s (raw %r): %s",
+            change.chat.id, change.message_id, who, sorted(old), sorted(new),
+            [getattr(r, "emoji", None) or r.type for r in change.new_reaction], result,
+        )
+
+    if change.user is None:
+        return outcome("ignored, no user")
+    if poll is None:
+        return outcome("ignored, no live check in this chat")
+    if poll["message_id"] != change.message_id:
+        return outcome(f"ignored, live check is message {poll['message_id']}")
+
     added, removed = new - old, old - new
     current = poll["votes"].get(change.user.id)
     current_status = current[1] if current else None
@@ -388,9 +403,10 @@ async def on_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         # Only clear if the reaction taken away is what set the current status,
         # so removing a stale 👍 after tapping "Soon" leaves "Soon" alone
         if not any(REACTIONS.get(e) == current_status for e in removed):
-            return
+            return outcome(f"no change, status stays {current_status}")
     elif status == current_status:
-        return
+        return outcome(f"no change, already {status}")
+    outcome(f"{current_status} -> {status}")
     await set_status(context.bot, change.chat.id, poll, change.user.id, change.user.first_name, status)
 
 
