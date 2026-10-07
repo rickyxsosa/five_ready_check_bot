@@ -302,6 +302,29 @@ async def test_reactions_set_and_clear_status():
     assert "GAME ON" in [c for c in calls if c[0] == "edit"][-1][2]
 
 
+def test_registered_reaction_handler_accepts_real_updates():
+    # Calling on_reaction directly hid a registration bug: the handler was
+    # built with the reaction type in the chat_id slot and matched no chat
+    from telegram import Update
+
+    def reaction_update(chat_id):
+        return Update.de_json({
+            "update_id": 1,
+            "message_reaction": {
+                "chat": {"id": chat_id, "type": "supergroup", "title": "g"},
+                "message_id": 5,
+                "user": {"id": 7, "is_bot": False, "first_name": "Sam"},
+                "date": 0,
+                "old_reaction": [],
+                "new_reaction": [{"type": "emoji", "emoji": "👎"}],
+            },
+        }, None)
+
+    handler = bot.reaction_handler()
+    for chat_id in (-1001182379013, -1002308226430, 12345):
+        assert handler.check_update(reaction_update(chat_id)), chat_id
+
+
 def test_parse_args():
     p = bot.parse_args
     assert p([]) == (None, None)

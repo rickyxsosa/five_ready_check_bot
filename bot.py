@@ -410,6 +410,14 @@ async def on_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await set_status(context.bot, change.chat.id, poll, change.user.id, change.user.first_name, status)
 
 
+def reaction_handler() -> MessageReactionHandler:
+    # Keyword, not positional: MessageReactionHandler's second parameter is
+    # chat_id, and passing the reaction type there filtered every chat out
+    return MessageReactionHandler(
+        on_reaction, message_reaction_types=MessageReactionHandler.MESSAGE_REACTION_UPDATED
+    )
+
+
 def expires_at(created: float) -> float:
     """The first EXPIRE_AT after a check was posted. Built from the calendar date
     rather than by adding 24h, so it stays on the wall-clock time across DST."""
@@ -489,7 +497,7 @@ def main() -> None:
     app.add_handler(CommandHandler(["readycheck", "rc"], readycheck))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^status:"))
-    app.add_handler(MessageReactionHandler(on_reaction, MessageReactionHandler.MESSAGE_REACTION_UPDATED))
+    app.add_handler(reaction_handler())
     app.add_handler(MessageHandler(filters.StatusUpdate.PINNED_MESSAGE, drop_pin_notice))
     app.job_queue.run_repeating(tick, interval=TICK_SECONDS, first=TICK_SECONDS, name="tick")
 
